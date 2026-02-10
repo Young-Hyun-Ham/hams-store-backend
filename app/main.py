@@ -25,7 +25,7 @@ if not origins:
 
 app.add_middleware(
   CORSMiddleware,
-  allow_origins=origins,          # ✅ 특정 origin만
+  allow_origins=origins,          # 특정 origin만
   allow_credentials=True,         # 쿠키/인증 필요 시
   allow_methods=["*"],            # GET/POST/PUT/DELETE/OPTIONS 전부
   allow_headers=["*"],            # Authorization, Content-Type 등 전부

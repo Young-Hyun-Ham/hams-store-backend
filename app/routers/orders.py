@@ -154,13 +154,15 @@ def get_order(order_id: str):
                 if not order:
                     raise HTTPException(404, "order not found")
 
+                # ✅ 여기서 id는 uuid로 유지하고, order_id만 text로 바꿔도 됨
                 cur.execute("""
-                    select id::text, order_id::text as order_id, menu_item_id::text as menu_item_id,
+                    select id, order_id::text as order_id, menu_item_id::text as menu_item_id,
                            name_snapshot, price_snapshot, qty, line_amount
                     from order_items where order_id=%s
                 """, (order_id,))
                 items = cur.fetchall() or []
 
+                # ✅ item_ids는 uuid 리스트가 됨
                 item_ids = [it["id"] for it in items]
                 options = []
                 if item_ids:
@@ -168,14 +170,17 @@ def get_order(order_id: str):
                         select id::text, order_item_id::text as order_item_id,
                                option_key, option_name, value_key, value_label, price_delta
                         from order_item_options
-                        where order_item_id = any(%s)
+                        where order_item_id = any(%s::uuid[])
                     """, (item_ids,))
                     options = cur.fetchall() or []
+
+                # ✅ 응답 JSON용: items의 id를 text로 변환
+                for it in items:
+                    it["id"] = str(it["id"])
 
                 return {"order": order, "items": items, "itemOptions": options}
     finally:
         conn.close()
-
 
 @router.get("")
 def list_orders(customerId: Optional[str] = None, limit: int = 30):
