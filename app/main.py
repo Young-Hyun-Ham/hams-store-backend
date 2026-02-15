@@ -8,6 +8,7 @@ from app.routers.orders import router as orders_router
 from app.routers.admin_orders import router as admin_orders_router
 from app.routers.devices import router as devices_router
 from app.routers.admin_notifications import router as admin_notifications_router
+from app.routers.users import router as users_router
 
 app = FastAPI(title="임진매운갈비 API")
 
@@ -42,3 +43,4 @@ app.include_router(orders_router)
 app.include_router(admin_orders_router)
 app.include_router(devices_router)
 app.include_router(admin_notifications_router)
+app.include_router(users_router)

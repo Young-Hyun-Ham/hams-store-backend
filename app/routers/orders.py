@@ -8,6 +8,8 @@ import json
 
 from app.db import get_conn
 
+from app.fcm import send_push_to_tokens
+
 router = APIRouter(prefix="/orders", tags=["orders"])
 
 class SelectedOptionIn(BaseModel):
@@ -134,7 +136,94 @@ def create_order(payload: CreateOrderIn):
                     values (%s, null, 'PLACED', %s)
                 """, (order_id, payload.customerId))
 
-                return out
+                # ✅ (추가) 사장님(owner/admin)에게 "새 주문" 푸시 발송
+                title = "임진매운갈비"
+                body = f"새 주문이 들어왔습니다! (주문번호 {out['order_no']})"
+                data_payload = {"type": "new_order", "orderId": order_id, "nextStatus": "PLACED"}
+
+                # 1) 사장님/관리자 유저 조회
+                cur.execute("""
+                    select id::text as id
+                    from users
+                    where role in ('owner', 'admin')
+                """)
+                owners = [r["id"] for r in (cur.fetchall() or [])]
+
+                push_summary = {"owners": len(owners), "targets": 0, "sent": 0, "failed": 0}
+
+                # 2) owner별로 알림로그 기록 + 토큰 조회 + 즉시 발송
+                for owner_id in owners:
+                    # 2-1) notification_logs queued 기록
+                    cur.execute("""
+                        insert into notification_logs(order_id, user_id, channel, title, body, payload, send_status)
+                        values (%s, %s, 'fcm', %s, %s, %s::jsonb, 'queued')
+                        returning id::text as id
+                    """, (order_id, owner_id, title, body, json.dumps(data_payload)))
+                    noti_id = cur.fetchone()["id"]
+
+                    # 2-2) 사장님 토큰 조회
+                    cur.execute("""
+                        select fcm_token
+                        from devices
+                        where user_id=%s and is_active=true and fcm_token is not null and fcm_token <> ''
+                        order by last_seen_at desc nulls last
+                        limit 20
+                    """, (owner_id,))
+                    tokens = [r["fcm_token"] for r in (cur.fetchall() or []) if r.get("fcm_token")]
+
+                    if not tokens:
+                        push_summary["failed"] += 1
+                        cur.execute("""
+                            update notification_logs
+                            set send_status='failed',
+                                error_message=%s,
+                                sent_at=now()
+                            where id=%s
+                        """, ("no active device tokens", noti_id))
+                        continue
+
+                    push_summary["targets"] += len(tokens)
+
+                    # 2-3) 즉시 FCM 발송 + 로그 업데이트
+                    try:
+                        success_count, results = send_push_to_tokens(
+                            tokens=tokens,
+                            title=title,
+                            body=body,
+                            data={k: str(v) for k, v in data_payload.items()},
+                        )
+
+                        if success_count > 0:
+                            push_summary["sent"] += 1
+                            cur.execute("""
+                                update notification_logs
+                                set send_status='sent',
+                                    sent_at=now(),
+                                    error_message=null
+                                where id=%s
+                            """, (noti_id,))
+                        else:
+                            push_summary["failed"] += 1
+                            cur.execute("""
+                                update notification_logs
+                                set send_status='failed',
+                                    sent_at=now(),
+                                    error_message=%s
+                                where id=%s
+                            """, (json.dumps({"tokens": len(tokens), "results": results})[:4000], noti_id))
+
+                    except Exception as e:
+                        push_summary["failed"] += 1
+                        cur.execute("""
+                            update notification_logs
+                            set send_status='failed',
+                                sent_at=now(),
+                                error_message=%s
+                            where id=%s
+                        """, (str(e)[:4000], noti_id))
+
+                # 응답에 push 요약 포함(프론트 디버깅용)
+                return {**out, "push": push_summary}
     finally:
         conn.close()
 
